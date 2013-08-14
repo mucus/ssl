@@ -1,168 +1,139 @@
-var fs = require('fs');
-var exec = require('child_process').exec, child;
-var ssl = {};
-/*********************************************
+//
+//     SSL
+//     Verify SSL certificates; convert files; remove passcode from
+//        private keys.
+//     Copyright(c) 2013 Modulus <feedback@modulus.io>
+//     MIT Licensed
+//
 
-  Verify SSl Certificates
-  Change string to file
-  convert files from .pem to .der (vise versa)
-  remove passcode on private keys
+var fs = require('fs')
+  , exec = require('child_process').exec
+  , path = require('path')
+  , util = require('util');
 
-***********************************************/
+var ssl = exports;
 
-/***************************************************************************************
-
-  Changing a .pem to .der
-  @param {string} file name of file to change must include .pem
-  @prarm {string} give a file name to save the contents to must include .der
-  @param {function} callback throw an error if command does not execute properly or null
-
-******************************************************************************************/
-ssl.toDER = function(file, derFileName, callback) {
-  exec('openssl x509 -in ' + file + ' -outform der -out ' + derFileName, function(error, stdout) {
-    if(error) {
-      callback(error);
-    }
-    console.log(file + ' was changed to ' + derFileName);
-    callback(null);
-  })
+//
+// Execute the specified command using the specified callback.
+//
+ssl._runCommand = function(cmd, fn) {
+  exec(cmd, fn);
 };
 
-/***************************************************************************************
-
-  Changing a .der to .pem
-  @param {string} file name of file to change must include .der
-  @prarm {string} give a file name to save the contents to must include .pem
-  @param {function} callback throw an error if command does not execute properly or null
-
-******************************************************************************************/
-
-ssl.toPEM = function(file, pemFileName, callback) {
-  exec('openssl x509 -in ' + file + ' -outform pem -out ' + pemFileName, function(error, stdout) {
-    if(error) {
-      callback(error);
-    }
-    callback(null);
-  })
-};
-
-/***************************************************************************************
-
-  Simple command to verify a certificate
-  **IMPORTANT NOTE CERTIFICATE MUST BE A .PEM FILE
-  @param {string} file name of certificate must include .pem
-  @param {function} callback throw an error if command does not execute properly or if the
-                    certificate is not verified - if the certificate is verified it will
-                    return a string.
-
-******************************************************************************************/
-
-ssl.verify = function(caFile, file, callback) {
-  exec('openssl verify -CAfile ' + caFile + ' ' + file, function(error, stdout, stderr) {
-    if(error) {
-      return callback(error, null);
-    } else if (stderr){
-      return callback(stderr, null);
-    }
-    var remaining = stdout;
-    var index = stdout.indexOf('\n');
-    while (index > -1) {
-      var line = remaining.substring(0, index);
-      remaining = remaining.substring(index + 1);
-      index = line.indexOf(' ');
-      var firstWord = line.substring(0, index);
-      if(firstWord === 'error' || firstWord === 'unable') {
-        return callback(line, null);
-      }
-      index = remaining.indexOf('\n');
-    }
-    callback(null, "this certificate has been verified");
-  });
-};
-
-/****************************************************************************************
-
-  Simple command to remove a passphrase from a key and rewrites back to the original file
-  @param  {string} file name of certificate must include extension
-  @param  {string} pass key password
-  @param  {object} opts optional parameters
-  @config {string} [opts.newKeyName] specify the new files name with extension .pem or
-                                     default to newPrivateKey.pem
-  @config {string} [opts.inform]     specify the original key files extension or
-                                     default to PEM
-  @config {string} [opts.inform]     specify the new key files extension or
-                                     default to PEM
-  @param {function} callback throw an error if command does not execute properly, if there
-                    is an error reading or writing the files
-
-******************************************************************************************/
-
-
+//
+// Removes a passphrase from a private key and overwrites the original file
+//    with the new file.
+//
 ssl.removePassphrase = function(file, pass, opts, callback) {
-  if(typeof opts === 'function') {
+  if (typeof opts === 'function') {
     callback = opts;
     opts = {};
   }
+
   opts.newKeyName = opts.newKeyName || 'newPrivteKey.pem';
   opts.informExt = opts.informExt || 'PEM';
   opts.outformExt = opts.outformExt || 'PEM';
-  exec('openssl rsa -passin pass:' + pass + ' -inform  ' + opts.informExt + ' -in '+ file + ' -outform '+ opts.outformExt + ' -out ' +  opts.newKeyName
-    , function(error, stdout) {
-    if(error) {
-      return callback(error);
-    }
+
+  var cmd = util.format(
+    'openssl rsa -passin pass:%s -inform %s -in %s -outform %s -out',
+    pass,
+    opts.informExt,
+    file,
+    opts.outformExt,
+    opts.newKeyName);
+
+  ssl._runCommand(cmd, function(error) {
+    if (error) return callback(error);
+
     fs.readFile(opts.newKeyName, function(err, data) {
-      if(err) {
-        return callback('read file', err);
-      }
+      if (err) return callback(err);
       fs.writeFile(file, data, function(err) {
-        if(err) {
-          return callback('write file', err);
-        }
-        console.log('saved back to original file without passphrase');
+        if (err) return callback(err);
+
         callback(null);
       });
     });
   });
 };
 
-/****************************************************************************************
+//
+// Convert a .pem file to a .der file.
+//
+ssl.toDer = function(file, derFileName, callback) {
+  var cmd = util.format(
+    'openssl x509 -in %s -outform der -out %s',
+    file,
+    derFileName);
 
-  Simple command to write a string to a file to use the functions above
-  @param  {string} string encrypted certificate or key
-  @param  {object} opts optional parameters
-  @config {string} [opts.folderName] specify the new folder name or
-                                     default to temp
-  @config {string} [opts.name]       specify the files name or
-                                     default to temp
-  @config {string} [opts.inform]     specify the files extension or
-                                     default to .pem
-  @param {function} callback throw an error if making folder or writing a file does or
-                    returns the filename
+  ssl._runCommand(cmd, function(error) {
+    if (error) return callback(error);
+    callback(null);
+  });
+};
 
-******************************************************************************************/
-
-
+//
+// Saves a string representation of a key to a file. Specify the file and
+//    location using options `folderName`, `name`, and `ext`.
+//
 ssl.toFile = function(string, opts, callback) {
-  if(typeof opts === 'function') {
+  if (typeof opts === 'function') {
     callback = opts;
     opts = {};
   }
+
   opts.folderName = opts.folderName || 'temp';
   opts.name = opts.name || 'temp';
   opts.ext = opts.ext || '.pem';
-  fs.mkdirSync('./' + opts.folderName, function(err) {
-    if(err) {
-      return callback(err, null);
-    }
-  })
-    fs.writeFile(opts.folderName + '/' + opts.name + opts.ext, string, function(err) {
-        if(err) {
-          return callback(err, null);
-        }
-        return callback(null, opts.name + opts.ext);
-    });
+
+  var dirPath = path.resolve(opts.folderName);
+  if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath);
+
+  fs.writeFile(opts.folderName + '/' + opts.name + opts.ext, string, function(err) {
+    if (err) return callback(err, null);
+    return callback(null, opts.name + opts.ext);
+  });
 };
 
+//
+// Convert the specified file to a .pem file with the specified name.
+//
+ssl.toPem = function(file, pemFileName, callback) {
+  var cmd = util.format(
+    'openssl x509 -in %s -inform der -text -outform pem -out %s',
+    file,
+    pemFileName);
 
-module.exports = ssl;
+  ssl._runCommand(cmd, function(error) {
+    if (error) return callback(error);
+    callback(null);
+  });
+};
+
+//
+// Verifies the validity of the specified .PEM certificate.
+//
+exports.verify = function(caFile, file, callback) {
+  var cmd = util.format('openssl verify -CAfile %s %s', caFile, file);
+
+  ssl._runCommand(cmd, function(error, stdout, stderr) {
+    if (error || stderr) return callback(error || stderr, null);
+
+    var remaining = stdout;
+    var index = stdout.indexOf('\n');
+
+    while (index > -1) {
+      var line = remaining.substring(0, index);
+      remaining = remaining.substring(index + 1);
+      index = line.indexOf(' ');
+      var firstWord = line.substring(0, index);
+
+      if (firstWord === 'error') {
+        return callback(line, null);
+      }
+
+      index = remaining.indexOf('\n');
+    }
+
+    callback(null, stdout);
+  });
+};
